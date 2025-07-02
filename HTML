@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מערכת SmarTriage - טריאז' חכם לאחיות</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .rtl {
+            direction: rtl;
+            text-align: right;
+        }
+    </style>
+</head>
+<body class="rtl">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState } = React;
+        const { AlertCircle, User, Calendar, Stethoscope, FileText, CheckCircle, ArrowLeft, ArrowRight } = lucideReact;
+
+        // Mock Claude API for standalone version
+        window.claude = {
+            complete: async function(prompt) {
+                // Simple rule-based logic for demo purposes
+                const vitalSigns = prompt.toLowerCase();
+                
+                if (vitalSigns.includes('חום גבוה') || vitalSigns.includes('קוצר נשימה') || 
+                    vitalSigns.includes('לחץ דם נמוך') || vitalSigns.includes('דופק מהיר') ||
+                    vitalSigns.includes('סטורציה נמוכה') || vitalSigns.includes('כאב חזק')) {
+                    return JSON.stringify({
+                        "urgencyLevel": "הפניה מיידית למיון",
+                        "reasoning": "נמצאו סימנים חיוניים חריגים הדורשים טיפול מיידי",
+                        "recommendedActions": [
+                            "הפניה מיידית למיון",
+                            "ליווי והכנה לפינוי",
+                            "תיעוד מפורט של המדדים"
+                        ],
+                        "warningSignsToWatch": [
+                            "החמרה במצב הכללי",
+                            "ירידה נוספת בלחץ דם",
+                            "קוצר נשימה מתגבר"
+                        ]
+                    });
+                } else if (vitalSigns.includes('חום קל') || vitalSigns.includes('כאב בינוני') ||
+                          vitalSigns.includes('מדדים גבוליים')) {
+                    return JSON.stringify({
+                        "urgencyLevel": "התייעצות עם רופא",
+                        "reasoning": "מצב הדורש הערכה רפואית מקצועית",
+                        "recommendedActions": [
+                            "תיאום פגישה עם רופא היום",
+                            "המשך מעקב מדדים",
+                            "הוראות לחזרה במקרה החמרה"
+                        ],
+                        "warningSignsToWatch": [
+                            "עלייה בחום",
+                            "החמרת הכאב",
+                            "הופעת תסמינים נוספים"
+                        ]
+                    });
+                } else {
+                    return JSON.stringify({
+                        "urgencyLevel": "טיפול תומך ומעקב",
+                        "reasoning": "מצב יציב הניתן לטיפול תומך",
+                        "recommendedActions": [
+                            "מעקב בבית",
+                            "שמירה על נוחות",
+                            "חזרה במקרה החמרה"
+                        ],
+                        "warningSignsToWatch": [
+                            "החמרה במצב",
+                            "הופעת חום",
+                            "הגברת הכאב"
+                        ]
+                    });
+                }
+            }
+        };
+
+        const TriageApp = () => {
+            const [currentStep, setCurrentStep] = useState(1);
+            const [patientData, setPatientData] = useState({
+                age: '',
+                gender: '',
+                chiefComplaint: '',
+                vitalSigns: '',
+                generalImpression: '',
+                selectedCase: null
+            });
+            const [triageResult, setTriageResult] = useState(null);
+            const [isLoading, setIsLoading] = useState(false);
+
+            // Triage cases data
+            const triageCases = {
+                'ent_symptoms': {
+                    name: 'כאב גרון, כאב אוזניים או נזלת',
+                    description: 'תסמינים שכיחים, לעיתים ויראליים ולעיתים דורשים טיפול רפואי',
+                    vitalSigns: [
+                        'חום גוף',
+                        'דופק',
+                        'הערכת קושי בבליעה ודיבור',
+                        'התרשמות מצוואר – בלוטות לימפה ונפיחות',
+                        'הערכת כאב (VAS)',
+                        'הסתכלות באוזניים (אם מוסמכת)',
+                        'הסתכלות בגרון (אם מוסמכת)',
+                        'הערכת נזלת: צבע, כמות, גודש'
+                    ]
+                },
+                'skin_issues': {
+                    name: 'פריחה, אודם, גירוי, שלפוחיות או נפיחות בעור',
+                    description: 'לעיתים מלווה בגרד, כאב, חום או תסמינים כלליים',
+                    vitalSigns: [
+                        'חום גוף',
+                        'מצב הכרה ודיבור',
+                        'קוצר נשימה',
+                        'מראה כללי של העור: מיקום, גודל, צבע',
+                        'נוכחות של שלפוחיות, מוגלה, פצע פתוח',
+                        'בדיקת אזורים נוספים בגוף',
+                        'בירור רקע תרופתי או אלרגי'
+                    ]
+                },
+                'chest_pain': {
+                    name: 'כאב או לחץ בחזה',
+                    description: 'לוחץ, שורף, דוקר או מקרין לכתף, יד, לסת או גב',
+                    vitalSigns: [
+                        'לחץ דם',
+                        'דופק',
+                        'סטורציה',
+                        'חום גוף',
+                        'ביצוע א.ק.ג.',
+                        'התרשמות כללית: צבע עור, קוצר נשימה'
+                    ]
+                },
+                'dyspnea': {
+                    name: 'קוצר נשימה (דיספנאה)',
+                    description: 'תחושת קושי בנשימה, חוסר אוויר, מאמץ נשימתי מוגבר',
+                    vitalSigns: [
+                        'סטורציה',
+                        'דופק',
+                        'לחץ דם',
+                        'חום גוף',
+                        'קצב נשימה',
+                        'האזנה לריאות',
+                        'התרשמות כללית: קושי בדיבור, עירנות'
+                    ]
+                },
+                'abdominal_pain': {
+                    name: 'כאבי בטן',
+                    description: 'בעוצמות שונות, ממוקמים או מפושטים',
+                    vitalSigns: [
+                        'לחץ דם',
+                        'דופק',
+                        'חום גוף',
+                        'סטורציה',
+                        'הערכת רמת כאב (VAS)',
+                        'בדיקת בטן (אם מוכשרת)'
+                    ]
+                },
+                'headache': {
+                    name: 'כאב ראש',
+                    description: 'חד, עמום, פועם, לוחץ או מקרין',
+                    vitalSigns: [
+                        'לחץ דם',
+                        'דופק',
+                        'חום גוף',
+                        'סטורציה',
+                        'הערכת מצב הכרה',
+                        'בדיקה נוירולוגית בסיסית (אם מוסמכת)'
+                    ]
+                },
+                'fever': {
+                    name: 'חום גוף',
+                    description: 'מעל 38°C ללא מקור ברור',
+                    vitalSigns: [
+                        'חום גוף',
+                        'לחץ דם',
+                        'דופק',
+                        'סטורציה',
+                        'סוכר (אם רלוונטי)',
+                        'עירנות / מצב הכרה'
+                    ]
+                },
+                'diarrhea': {
+                    name: 'שלשולים',
+                    description: 'צואה מימית או רכה, מופיע מספר פעמים ביום',
+                    vitalSigns: [
+                        'לחץ דם (כולל בין שכיבה לעמידה אם יש סחרחורת)',
+                        'דופק',
+                        'חום גוף',
+                        'סטורציה',
+                        'מצב עירנות ותפקוד כללי',
+                        'כמות שתן מדווחת',
+                        'סוכר (אם יש רקע של סכרת)',
+                        'בירור כאבי בטן נלווים'
+                    ]
+                },
+                'vomiting': {
+                    name: 'הקאות',
+                    description: 'הקאות יכולות להיות נפרדות או בשילוב עם שלשולים, מחייבות הערכת התייבשות',
+                    vitalSigns: [
+                        'לחץ דם (כולל בין שכיבה לעמידה אם יש סחרחורת)',
+                        'דופק',
+                        'חום גוף',
+                        'סטורציה',
+                        'מצב עירנות ותפקוד כללי',
+                        'כמות שתן מדווחת',
+                        'סוכר (אם יש רקע של סכרת)',
+                        'בירור כאבי בטן נלווים',
+                        'הערכת סימני התייבשות: יובש פה, עיניים שקועות, קמטי עור'
+                    ]
+                }
+            };
+
+            const performTriage = async () => {
+                setIsLoading(true);
+                
+                const selectedCaseData = triageCases[patientData.selectedCase];
+                
+                const prompt = `אתה מערכת טריאז' רפואי מתקדמת לאחיות במרפאות קהילה. עליך להחליט על רמת הדחיפות של המטופל על פי הנתונים הבאים:
+
+פרטי המטופל:
+- גיל: ${patientData.age}
+- מין: ${patientData.gender}
+- תלונה עיקרית: ${selectedCaseData?.name}
+
+מדדים חיוניים: ${patientData.vitalSigns}
+
+התרשמות כללית של האחות: ${patientData.generalImpression}
+
+על פי הפרוטוקולים הרפואיים, החלט על אחת משלוש רמות הדחיפות:
+1. "הפניה מיידית למיון" - מצב דחוף הדורש טיפול מיידי
+2. "התייעצות עם רופא" - מצב הדורש הערכה רפואית אך לא בהכרח מיידית  
+3. "טיפול תומך ומעקב" - מצב קל שניתן לטיפול תומך
+
+הנחיות מיוחדות:
+- בכאבי בטן: לא להמליץ על צום. יש להמליץ על דיאטה שמרנית - ללא מוצרי חלב וללא ירקות טריים
+- בכאבי בטן ושלשולים: להמליץ על קלבטן פורטה, ולידע את המטופל שהתרופה צובעת את הצואה בשחור
+- בשלשולים: לברר תמיד האם יש כאבי בטן נלווים ולטפל בהתאם
+- בהקאות ללא סימני התייבשות: התייעצות עם רופא, לשקול מתן פרמין/זופרן PO
+- בהקאות עם סימני התייבשות: מתן נוזלים ופרמין/זופרן IV
+- בכאבי חזה: לבצע מדדים חיוניים, בדיקה גופנית ואק"ג בלבד. אין לפרט פרוטוקולי ACS
+- באק"ג תקין: להמשיך בירור אפשרות גסטריטיס או כיב פפטי
+- אין להמליץ על פרוביוטיקה בשום מצב`;
+
+                try {
+                    const response = await window.claude.complete(prompt);
+                    
+                    let cleanResponse = response.trim();
+                    if (cleanResponse.startsWith('```json')) {
+                        cleanResponse = cleanResponse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+                    } else if (cleanResponse.startsWith('```')) {
+                        cleanResponse = cleanResponse.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                    }
+                    
+                    const result = JSON.parse(cleanResponse);
+                    setTriageResult(result);
+                } catch (error) {
+                    console.error('Error in triage assessment:', error);
+                    setTriageResult({
+                        urgencyLevel: "שגיאה",
+                        reasoning: "אירעה שגיאה בתהליך הטריאז'. יש להתייעץ עם רופא.",
+                        recommendedActions: ["התייעצות עם רופא מיידית"],
+                        warningSignsToWatch: ["כל שינוי במצב המטופל"]
+                    });
+                }
+                
+                setIsLoading(false);
+            };
+
+            const resetTriage = () => {
+                setCurrentStep(1);
+                setPatientData({
+                    age: '',
+                    gender: '',
+                    chiefComplaint: '',
+                    vitalSigns: '',
+                    generalImpression: '',
+                    selectedCase: null
+                });
+                setTriageResult(null);
+            };
+
+            const getUrgencyColor = (urgency) => {
+                if (urgency.includes('מיידית')) return 'text-red-600 bg-red-50 border-red-200';
+                if (urgency.includes('רופא')) return 'text-orange-600 bg-orange-50 border-orange-200';
+                if (urgency.includes('תומך')) return 'text-green-600 bg-green-50 border-green-200';
+                return 'text-gray-600 bg-gray-50 border-gray-200';
+            };
+
+            const renderStep = () => {
+                switch (currentStep) {
+                    case 1:
+                        return (
+                            <div className="space-y-6">
+                                <div className="text-center">
+                                    <User className="mx-auto h-12 w-12 text-blue-600 mb-4" />
+                                    <h2 className="text-2xl font-bold text-gray-900 mb-2">פרטי המטופל</h2>
+                                    <p className="text-gray-600">הזינו את הנתונים הבסיסיים של המטופל</p>
+                                </div>
+                                
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2 text-right">
+                                            גיל המטופל
+                                        </label>
+                                        <input
+                                            type="number"
+                                            value={patientData.age}
+                                            onChange={(e) => setPatientData({...patientData, age: e.target.value})}
+                                            className="w-full p-3 border border-gray-300 rounded-lg text-right"
+                                            placeholder="הזינו גיל"
+                                        />
+                                    </div>
+                                    
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2 text-right">
+                                            מין המטופל
+                                        </label>
+                                        <select
+                                            value={patientData.gender}
+                                            onChange={(e) => setPatientData({...patientData, gender: e.target.value})}
+                                            className="w-full p-3 border border-gray-300 rounded-lg text-right"
+                                        >
+                                            <option value="">בחרו מין</option>
+                                            <option value="זכר">זכר</option>
+                                            <option value="נקבה">נקבה</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        );
+
+                    case 2:
+                        return (
+                            <div className="space-y-6">
+                                <div className="text-center">
+                                    <FileText className="mx-auto h-12 w-12 text-blue-600 mb-4" />
+                                    <h2 className="text-2xl font-bold text-gray-900 mb-2">תלונה עיקרית</h2>
+                                    <p className="text-gray-600">בחרו את התלונה העיקרית של המטופל</p>
+                                </div>
+                                
+                                <div className="grid gap-3">
+                                    {Object.entries(triageCases).map(([key, caseData]) => (
+                                        <button
+                                            key={key}
+                                            onClick={() => setPatientData({...patientData, selectedCase: key})}
+                                            className={`p-4 text-right rounded-lg border-2 transition-all ${
+                                                patientData.selectedCase === key
+                                                    ? 'border-blue-500 bg-blue-50 text-blue-900'
+                                                    : 'border-gray-200 hover:border-gray-300 text-gray-700'
+                                            }`}
+                                        >
+                                            <div className="font-medium">{caseData.name}</div>
+                                            <div className="text-sm text-gray-500 mt-1">{caseData.description}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        );
+
+                    case 3:
+                        const selectedCase = triageCases[patientData.selectedCase];
+                        return (
+                            <div className="space-y-6">
+                                <div className="text-center">
+                                    <Stethoscope className="mx-auto h-12 w-12 text-blue-600 mb-4" />
+                                    <h2 className="text-2xl font-bold text-gray-900 mb-2">מדדים חיוניים</h2>
+                                    <p className="text-gray-600">רשמו את המדדים החיוניים הרלוונטיים</p>
+                                </div>
+                                
+                                <div className="bg-blue-50 p-4 rounded-lg">
+                                    <h3 className="font-medium text-blue-900 mb-2 text-right">מדדים נדרשים עבור: {selectedCase?.name}</h3>
+                                    <ul className="text-sm text-blue-800 space-y-1 text-right">
+                                        {selectedCase?.vitalSigns.map((sign, index) => (
+                                            <li key={index}>• {sign}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                
+                                <textarea
+                                    value={patientData.vitalSigns}
+                                    onChange={(e) => setPatientData({...patientData, vitalSigns: e.target.value})}
+                                    className="w-full p-4 border border-gray-300 rounded-lg h-32 text-right"
+                                    placeholder="רשמו את המדדים החיוניים שנמדדו..."
+                                    dir="rtl"
+                                />
+                            </div>
+                        );
+
+                    case 4:
+                        return (
+                            <div className="space-y-6">
+                                <div className="text-center">
+                                    <CheckCircle className="mx-auto h-12 w-12 text-blue-600 mb-4" />
+                                    <h2 className="text-2xl font-bold text-gray-900 mb-2">התרשמות כללית</h2>
+                                    <p className="text-gray-600">מה ההתרשמות הכללית שלך מהמטופל/ת?</p>
+                                </div>
+                                
+                                <textarea
+                                    value={patientData.generalImpression}
+                                    onChange={(e) => setPatientData({...patientData, generalImpression: e.target.value})}
+                                    className="w-full p-4 border border-gray-300 rounded-lg h-32 text-right"
+                                    placeholder="תארו את ההתרשמות הכללית שלכם מהמטופל/ת..."
+                                    dir="rtl"
+                                />
+                                
+                                <button
+                                    onClick={performTriage}
+                                    disabled={isLoading || !patientData.generalImpression.trim()}
+                                    className="w-full bg-blue-600 text-white py-4 px-6 rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center space-x-2 space-x-reverse"
+                                >
+                                    {isLoading ? (
+                                        <>
+                                            <div className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full"></div>
+                                            <span>מבצע טריאז'...</span>
+                                        </>
+                                    ) : (
+                                        <span>בצע טריאז'</span>
+                                    )}
+                                </button>
+                            </div>
+                        );
+
+                    default:
+                        return null;
+                }
+            };
+
+            const canProceed = () => {
+                switch (currentStep) {
+                    case 1:
+                        return patientData.age && patientData.gender;
+                    case 2:
+                        return patientData.selectedCase;
+                    case 3:
+                        return patientData.vitalSigns.trim();
+                    case 4:
+                        return patientData.generalImpression.trim();
+                    default:
+                        return false;
+                }
+            };
+
+            if (triageResult) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+                        <div className="max-w-4xl mx-auto">
+                            <div className="bg-white rounded-xl shadow-lg p-8">
+                                <div className="space-y-6">
+                                    <div className="text-center">
+                                        <AlertCircle className="mx-auto h-12 w-12 text-green-600 mb-4" />
+                                        <h2 className="text-2xl font-bold text-gray-900 mb-2">תוצאות הטריאז'</h2>
+                                    </div>
+                                    
+                                    <div className="overflow-hidden bg-white border border-gray-200 rounded-lg">
+                                        <table className="w-full" dir="rtl">
+                                            <thead className="bg-gray-50">
+                                                <tr>
+                                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                        נתונים שהתקבלו
+                                                    </th>
+                                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                        פעולות שיש לבצע
+                                                    </th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="bg-white divide-y divide-gray-200">
+                                                <tr>
+                                                    <td className="px-6 py-4 text-sm text-gray-900 text-right">
+                                                        <div className="space-y-2">
+                                                            <div><strong>גיל:</strong> {patientData.age}</div>
+                                                            <div><strong>מין:</strong> {patientData.gender}</div>
+                                                            <div><strong>תלונה:</strong> {triageCases[patientData.selectedCase]?.name}</div>
+                                                            <div><strong>מדדים:</strong> {patientData.vitalSigns}</div>
+                                                            <div><strong>התרשמות:</strong> {patientData.generalImpression}</div>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-4 text-sm text-right">
+                                                        <div className={`inline-flex px-3 py-1 rounded-full text-sm font-medium mb-3 ${getUrgencyColor(triageResult.urgencyLevel)}`}>
+                                                            {triageResult.urgencyLevel}
+                                                        </div>
+                                                        <div className="space-y-3">
+                                                            <div>
+                                                                <strong>הסבר:</strong>
+                                                                <p className="text-gray-700 mt-1">{triageResult.reasoning}</p>
+                                                            </div>
+                                                            <div>
+                                                                <strong>פעולות מומלצות:</strong>
+                                                                <ul className="text-gray-700 mt-1 space-y-1">
+                                                                    {triageResult.recommendedActions?.map((action, index) => (
+                                                                        <li key={index}>• {action}</li>
+                                                                    ))}
+                                                                </ul>
+                                                            </div>
+                                                            <div>
+                                                                <strong>סימני אזהרה למעקב:</strong>
+                                                                <ul className="text-gray-700 mt-1 space-y-1">
+                                                                    {triageResult.warningSignsToWatch?.map((warning, index) => (
+                                                                        <li key={index}>• {warning}</li>
+                                                                    ))}
+                                                                </ul>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    <button
+                                        onClick={resetTriage}
+                                        className="w-full bg-gray-600 text-white py-3 px-6 rounded-lg font-medium hover:bg-gray-700"
+                                    >
+                                        התחל טריאז' חדש
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+                    <div className="max-w-4xl mx-auto">
+                        <div className="bg-white rounded-xl shadow-lg p-8">
+                            <div className="text-center mb-8">
+                                <h1 className="text-3xl font-bold text-gray-900 mb-2">מערכת טריאז' לאחיות</h1>
+                                <p className="text-gray-600">מערכת חכמה למיון רפואי במרפאות קהילה</p>
+                            </div>
+
+                            <div className="flex justify-center mb-8">
+                                <div className="flex items-center space-x-4 space-x-reverse">
+                                    {[1, 2, 3, 4].map((step) => (
+                                        <div key={step} className="flex items-center">
+                                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
+                                                currentStep >= step 
+                                                    ? 'bg-blue-600 text-white' 
+                                                    : 'bg-gray-200 text-gray-600'
+                                            }`}>
+                                                {step}
+                                            </div>
+                                            {step < 4 && (
+                                                <div className={`w-16 h-1 ${
+                                                    currentStep > step ? 'bg-blue-600' : 'bg-gray-200'
+                                                }`} />
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {renderStep()}
+
+                            {currentStep < 4 && (
+                                <div className="flex justify-between mt-8">
+                                    <button
+                                        onClick={() => setCurrentStep(currentStep - 1)}
+                                        disabled={currentStep === 1}
+                                        className="flex items-center space-x-2 space-x-reverse px-6 py-3 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <ArrowLeft className="h-4 w-4" />
+                                        <span>חזור</span>
+                                    </button>
+                                    
+                                    <button
+                                        onClick={() => setCurrentStep(currentStep + 1)}
+                                        disabled={!canProceed()}
+                                        className="flex items-center space-x-2 space-x-reverse px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                                    >
+                                        <span>המשך</span>
+                                        <ArrowRight className="h-4 w-4" />
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<TriageApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>
